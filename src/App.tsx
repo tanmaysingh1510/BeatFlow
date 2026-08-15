@@ -13,33 +13,37 @@ import {
   VolumeX,
   Sliders,
   Eye,
-  Keyboard
+  Keyboard,
+  RotateCcw
 } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine.ts';
-import { SoundChannel, SoundChannelId, BrainwaveType, BinauralConfig, VisualTheme } from './types/index.ts';
+import { SoundChannel, SoundChannelId, BrainwaveType, BinauralConfig, VisualTheme, SoundscapePreset } from './types/index.ts';
 import { BinauralPanel } from './components/BinauralPanel.tsx';
 import { Visualizer } from './canvas/Visualizer.tsx';
+import { PresetSelector } from './components/PresetSelector.tsx';
+import { PomodoroTimer } from './components/PomodoroTimer.tsx';
 
 const INITIAL_CHANNELS: SoundChannel[] = [
-  { id: 'rain', name: 'Monsoon Rain', volume: 0.6, muted: false, description: 'Pink noise through resonant bandpass filter' },
-  { id: 'thunder', name: 'Distant Thunder', volume: 0.3, muted: false, description: 'Brownian low-frequency sub-bass' },
+  { id: 'rain', name: 'Monsoon Rain', volume: 0.75, muted: false, description: 'Pink noise through resonant bandpass filter' },
+  { id: 'thunder', name: 'Distant Thunder', volume: 0.4, muted: false, description: 'Brownian low-frequency sub-bass' },
   { id: 'fire', name: 'Warm Fireplace', volume: 0.0, muted: false, description: 'Poisson-distributed micro-crackles' },
-  { id: 'drone', name: 'Deep Space Drone', volume: 0.2, muted: false, description: '95Hz resonant ambient cosmic drone' },
+  { id: 'drone', name: 'Deep Space Drone', volume: 0.35, muted: false, description: '95Hz resonant ambient cosmic drone' },
   { id: 'waves', name: 'Ocean Swell', volume: 0.0, muted: false, description: 'Modulated low-frequency brownian waves' },
 ];
 
 export default function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [masterVolume, setMasterVolume] = useState(0.8);
-  const [visualTheme, setVisualTheme] = useState<VisualTheme>('cosmic');
+  const [visualTheme, setVisualTheme] = useState<VisualTheme>('cyberpunk');
   const [keystrokeCount, setKeystrokeCount] = useState<number>(0);
+  const [activePresetId, setActivePresetId] = useState<string | null>('dsa-grind');
   const [channels, setChannels] = useState<SoundChannel[]>(INITIAL_CHANNELS);
   const [binauralConfig, setBinauralConfig] = useState<BinauralConfig>({
     enabled: true,
     carrierHz: 216,
     beatHz: 40,
     waveType: 'gamma',
-    volume: 0.35
+    volume: 0.4
   });
 
   // Toggle global play / pause
@@ -64,8 +68,48 @@ export default function App() {
     }
   };
 
+  // Apply a curated or custom soundscape preset
+  const handleApplyPreset = (preset: SoundscapePreset) => {
+    setActivePresetId(preset.id);
+
+    // 1. Update Channels
+    setChannels((prev) =>
+      prev.map((ch) => {
+        const targetVol = preset.channels[ch.id] ?? 0;
+        if (isPlaying) {
+          audioEngine.setChannelVolume(ch.id, targetVol);
+        }
+        return { ...ch, volume: targetVol, muted: false };
+      })
+    );
+
+    // 2. Update Binaural Config
+    if (preset.binaural) {
+      const updatedBinaural: BinauralConfig = {
+        enabled: preset.binaural.enabled ?? binauralConfig.enabled,
+        carrierHz: preset.binaural.carrierHz ?? binauralConfig.carrierHz,
+        beatHz: preset.binaural.beatHz ?? binauralConfig.beatHz,
+        waveType: preset.binaural.waveType ?? binauralConfig.waveType,
+        volume: preset.binaural.volume ?? binauralConfig.volume
+      };
+
+      setBinauralConfig(updatedBinaural);
+      audioEngine.setBinauralEnabled(updatedBinaural.enabled);
+      audioEngine.setBinauralWave(updatedBinaural.waveType);
+      audioEngine.setBinauralBeatHz(updatedBinaural.beatHz);
+      audioEngine.setBinauralCarrierHz(updatedBinaural.carrierHz);
+      audioEngine.setBinauralVolume(updatedBinaural.volume);
+    }
+
+    // 3. Update Visual Theme
+    if (preset.visualTheme) {
+      setVisualTheme(preset.visualTheme);
+    }
+  };
+
   // Adjust volume for an individual channel
   const handleChannelVolume = (id: SoundChannelId, value: number) => {
+    setActivePresetId(null); // Custom tweaking
     setChannels((prev) =>
       prev.map((ch) => {
         if (ch.id === id) {
@@ -105,8 +149,22 @@ export default function App() {
     }
   };
 
+  // Reset all channels to 0
+  const handleResetMixer = () => {
+    setActivePresetId(null);
+    setChannels((prev) =>
+      prev.map((ch) => {
+        if (isPlaying) {
+          audioEngine.setChannelVolume(ch.id, 0);
+        }
+        return { ...ch, volume: 0, muted: false };
+      })
+    );
+  };
+
   // Binaural Beat Handlers
   const handleWaveTypeChange = (type: BrainwaveType) => {
+    setActivePresetId(null);
     setBinauralConfig((prev) => {
       const updated = { ...prev, waveType: type };
       audioEngine.setBinauralWave(type);
@@ -115,16 +173,19 @@ export default function App() {
   };
 
   const handleBeatHzChange = (hz: number) => {
+    setActivePresetId(null);
     setBinauralConfig((prev) => ({ ...prev, beatHz: hz }));
     audioEngine.setBinauralBeatHz(hz);
   };
 
   const handleCarrierHzChange = (hz: number) => {
+    setActivePresetId(null);
     setBinauralConfig((prev) => ({ ...prev, carrierHz: hz }));
     audioEngine.setBinauralCarrierHz(hz);
   };
 
   const handleBinauralVolume = (volume: number) => {
+    setActivePresetId(null);
     setBinauralConfig((prev) => ({ ...prev, volume }));
     audioEngine.setBinauralVolume(volume);
   };
@@ -191,12 +252,12 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h1 className="brand-title">BeatFlow</h1>
-                <span className="brand-badge" style={{ background: 'var(--accent-cyan-glow)', color: 'var(--accent-cyan)', borderColor: 'hsla(199, 89%, 52%, 0.3)' }}>
-                  Step 5: Keystroke Flow Active
+                <span className="brand-badge" style={{ background: 'hsla(160, 84%, 44%, 0.15)', color: 'var(--accent-emerald)', borderColor: 'hsla(160, 84%, 44%, 0.3)' }}>
+                  Step 7: Deep Work Suite Active
                 </span>
               </div>
               <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                Generative DSP Soundscape & Interactive Flow Canvas
+                Generative DSP Soundscape & Deep Work Pomodoro Suite
               </p>
             </div>
           </div>
@@ -245,6 +306,18 @@ export default function App() {
           </div>
         </header>
 
+        {/* Section 1: Pomodoro Deep Work Timer Hub */}
+        <PomodoroTimer />
+
+        {/* Section 2: Curated & Custom Presets */}
+        <PresetSelector
+          currentPresetId={activePresetId}
+          currentChannels={channels}
+          currentBinaural={binauralConfig}
+          currentTheme={visualTheme}
+          onSelectPreset={handleApplyPreset}
+        />
+
         {/* Visual Theme & Keystroke Flow Bar */}
         <div
           style={{
@@ -272,7 +345,10 @@ export default function App() {
                 return (
                   <button
                     key={theme}
-                    onClick={() => setVisualTheme(theme)}
+                    onClick={() => {
+                      setVisualTheme(theme);
+                      setActivePresetId(null);
+                    }}
                     style={{
                       background: isSelected ? 'var(--accent-cyan-glow)' : 'transparent',
                       border: isSelected ? '1px solid var(--accent-cyan)' : '1px solid transparent',
@@ -313,9 +389,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* Section 1: Sound Channel Mixer Grid */}
+        {/* Section 2: Sound Channel Mixer Grid */}
         <section style={{ marginTop: '1.75rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <div>
               <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <Headphones size={20} color="var(--accent-cyan)" />
@@ -325,9 +401,22 @@ export default function App() {
                 Infinite procedural audio generated mathematically in real-time. Zero audio files or network lag.
               </p>
             </div>
-            <span className="brand-badge" style={{ borderColor: isPlaying ? 'var(--accent-emerald)' : 'var(--border-glass)', color: isPlaying ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
-              {isPlaying ? '● DSP Engine Streaming' : '○ DSP Standby'}
-            </span>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <button
+                className="btn-secondary"
+                onClick={handleResetMixer}
+                style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }}
+                title="Reset all channel faders"
+              >
+                <RotateCcw size={13} />
+                <span>Reset Mix</span>
+              </button>
+
+              <span className="brand-badge" style={{ borderColor: isPlaying ? 'var(--accent-emerald)' : 'var(--border-glass)', color: isPlaying ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
+                {isPlaying ? '● DSP Engine Streaming' : '○ DSP Standby'}
+              </span>
+            </div>
           </div>
 
           <div
@@ -406,7 +495,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Section 2: Binaural Brainwave Entrainment Studio */}
+        {/* Section 3: Binaural Brainwave Entrainment Studio */}
         <BinauralPanel
           config={binauralConfig}
           isPlaying={isPlaying}

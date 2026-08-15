@@ -174,6 +174,48 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Synthesizes a soothing harmonic Zen focus chime using multi-oscillator overtones
+   * and an exponential decay acoustic envelope (No audio files needed!)
+   */
+  public playChime(): void {
+    if (!this.ctx || !this.masterGain) return;
+
+    const now = this.ctx.currentTime;
+    const fundamentalHz = 528; // Solfeggio frequency / Zen clarity tone
+    const harmonics = [1, 2.01, 3.02, 4.05]; // Natural acoustic bell overtones
+    const gains = [0.4, 0.2, 0.1, 0.05];
+
+    harmonics.forEach((multiplier, i) => {
+      if (!this.ctx || !this.masterGain) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(fundamentalHz * multiplier, now);
+
+      // Fast attack (10ms) followed by long, natural resonant exponential decay (3.5s)
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.linearRampToValueAtTime(gains[i], now + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.00001, now + 3.2);
+
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+
+      osc.start(now);
+      osc.stop(now + 3.3);
+
+      setTimeout(() => {
+        try {
+          osc.disconnect();
+          gain.disconnect();
+        } catch {
+          // Safe cleanup
+        }
+      }, 3500);
+    });
+  }
+
   // Binaural Beat Controls
   public setBinauralWave(wave: BrainwaveType): void {
     this.binaural.setWaveType(wave);
