@@ -14,14 +14,19 @@ import {
   Sliders,
   Eye,
   Keyboard,
-  RotateCcw
+  RotateCcw,
+  Quote,
+  CheckCircle2,
+  Share2,
+  Check
 } from 'lucide-react';
 import { audioEngine } from './audio/AudioEngine.ts';
-import { SoundChannel, SoundChannelId, BrainwaveType, BinauralConfig, VisualTheme, SoundscapePreset } from './types/index.ts';
+import { SoundChannel, SoundChannelId, BrainwaveType, BinauralConfig, VisualTheme, SoundscapePreset, AIPlanResponse } from './types/index.ts';
 import { BinauralPanel } from './components/BinauralPanel.tsx';
 import { Visualizer } from './canvas/Visualizer.tsx';
 import { PresetSelector } from './components/PresetSelector.tsx';
 import { PomodoroTimer } from './components/PomodoroTimer.tsx';
+import { AIModal } from './components/AIModal.tsx';
 
 const INITIAL_CHANNELS: SoundChannel[] = [
   { id: 'rain', name: 'Monsoon Rain', volume: 0.75, muted: false, description: 'Pink noise through resonant bandpass filter' },
@@ -37,6 +42,11 @@ export default function App() {
   const [visualTheme, setVisualTheme] = useState<VisualTheme>('cyberpunk');
   const [keystrokeCount, setKeystrokeCount] = useState<number>(0);
   const [activePresetId, setActivePresetId] = useState<string | null>('dsa-grind');
+  const [isAIModalOpen, setIsAIModalOpen] = useState(false);
+  const [activeAIPlan, setActiveAIPlan] = useState<AIPlanResponse | null>(null);
+  const [checkedGoals, setCheckedGoals] = useState<Record<number, boolean>>({});
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+
   const [channels, setChannels] = useState<SoundChannel[]>(INITIAL_CHANNELS);
   const [binauralConfig, setBinauralConfig] = useState<BinauralConfig>({
     enabled: true,
@@ -45,6 +55,72 @@ export default function App() {
     waveType: 'gamma',
     volume: 0.4
   });
+
+  // On Mount: Parse URL Search Parameters for 1-Click Shared Soundscapes
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const hasSharedParams = params.has('rain') || params.has('wave') || params.has('theme');
+
+      if (hasSharedParams) {
+        // Load channel volumes from URL
+        setChannels((prev) =>
+          prev.map((ch) => {
+            const paramVal = params.get(ch.id);
+            if (paramVal !== null) {
+              const parsed = parseFloat(paramVal);
+              return { ...ch, volume: isNaN(parsed) ? ch.volume : parsed, muted: false };
+            }
+            return ch;
+          })
+        );
+
+        // Load Binaural Wave from URL
+        const sharedWave = params.get('wave') as BrainwaveType | null;
+        const sharedBeatHz = params.get('beatHz');
+        if (sharedWave) {
+          setBinauralConfig((prev) => ({
+            ...prev,
+            waveType: sharedWave,
+            beatHz: sharedBeatHz ? parseFloat(sharedBeatHz) : prev.beatHz
+          }));
+        }
+
+        // Load Visual Theme from URL
+        const sharedTheme = params.get('theme') as VisualTheme | null;
+        if (sharedTheme) {
+          setVisualTheme(sharedTheme);
+        }
+
+        setActivePresetId(null);
+      }
+    } catch {
+      // Safe URL parse fallback
+    }
+  }, []);
+
+  // Generate and Copy Shareable Soundscape URL
+  const handleShareSoundscape = () => {
+    try {
+      const url = new URL(window.location.origin + window.location.pathname);
+      channels.forEach((ch) => {
+        if (ch.volume > 0 && !ch.muted) {
+          url.searchParams.set(ch.id, ch.volume.toString());
+        }
+      });
+      if (binauralConfig.enabled) {
+        url.searchParams.set('wave', binauralConfig.waveType);
+        url.searchParams.set('beatHz', binauralConfig.beatHz.toString());
+      }
+      url.searchParams.set('theme', visualTheme);
+
+      navigator.clipboard.writeText(url.toString());
+      setCopiedShareLink(true);
+      setTimeout(() => setCopiedShareLink(false), 2500);
+    } catch (e) {
+      console.error('Failed to copy share link', e);
+    }
+  };
 
   // Toggle global play / pause
   const togglePlay = async () => {
@@ -71,6 +147,7 @@ export default function App() {
   // Apply a curated or custom soundscape preset
   const handleApplyPreset = (preset: SoundscapePreset) => {
     setActivePresetId(preset.id);
+    setActiveAIPlan(null);
 
     // 1. Update Channels
     setChannels((prev) =>
@@ -107,9 +184,49 @@ export default function App() {
     }
   };
 
+  // Apply Gemini AI Focus Architect Plan
+  const handleApplyAIPlan = async (plan: AIPlanResponse) => {
+    setActiveAIPlan(plan);
+    setActivePresetId(null);
+    setCheckedGoals({});
+
+    // Start playback if not already playing
+    if (!isPlaying) {
+      await audioEngine.play();
+      setIsPlaying(true);
+    }
+
+    // 1. Morph channels
+    setChannels((prev) =>
+      prev.map((ch) => {
+        const targetVol = plan.soundscape[ch.id] ?? 0;
+        audioEngine.setChannelVolume(ch.id, targetVol);
+        return { ...ch, volume: targetVol, muted: false };
+      })
+    );
+
+    // 2. Morph Binaural
+    const updatedBinaural: BinauralConfig = {
+      enabled: true,
+      carrierHz: plan.binaural.carrierHz,
+      beatHz: plan.binaural.beatHz,
+      waveType: plan.binaural.targetWave,
+      volume: plan.binaural.volume
+    };
+    setBinauralConfig(updatedBinaural);
+    audioEngine.setBinauralEnabled(true);
+    audioEngine.setBinauralWave(updatedBinaural.waveType);
+    audioEngine.setBinauralBeatHz(updatedBinaural.beatHz);
+    audioEngine.setBinauralCarrierHz(updatedBinaural.carrierHz);
+    audioEngine.setBinauralVolume(updatedBinaural.volume);
+
+    // 3. Morph Theme
+    setVisualTheme(plan.visualTheme);
+  };
+
   // Adjust volume for an individual channel
   const handleChannelVolume = (id: SoundChannelId, value: number) => {
-    setActivePresetId(null); // Custom tweaking
+    setActivePresetId(null);
     setChannels((prev) =>
       prev.map((ch) => {
         if (ch.id === id) {
@@ -152,6 +269,7 @@ export default function App() {
   // Reset all channels to 0
   const handleResetMixer = () => {
     setActivePresetId(null);
+    setActiveAIPlan(null);
     setChannels((prev) =>
       prev.map((ch) => {
         if (isPlaying) {
@@ -230,7 +348,9 @@ export default function App() {
             justifyContent: 'space-between',
             alignItems: 'center',
             paddingBottom: '1.5rem',
-            borderBottom: '1px solid var(--border-glass)'
+            borderBottom: '1px solid var(--border-glass)',
+            flexWrap: 'wrap',
+            gap: '1rem'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -252,17 +372,17 @@ export default function App() {
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <h1 className="brand-title">BeatFlow</h1>
-                <span className="brand-badge" style={{ background: 'hsla(160, 84%, 44%, 0.15)', color: 'var(--accent-emerald)', borderColor: 'hsla(160, 84%, 44%, 0.3)' }}>
-                  Step 7: Deep Work Suite Active
+                <span className="brand-badge" style={{ background: 'var(--accent-cyan-glow)', color: 'var(--accent-cyan)', borderColor: 'hsla(199, 89%, 52%, 0.3)' }}>
+                  v1.0 • Live
                 </span>
               </div>
               <p style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
-                Generative DSP Soundscape & Deep Work Pomodoro Suite
+                Generative DSP Soundscapes, Binaural Entrainment & Gemini AI Architect
               </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
             {/* Master Volume Slider */}
             <div
               style={{
@@ -291,20 +411,110 @@ export default function App() {
               </span>
             </div>
 
+            {/* Share Soundscape URL Button */}
             <button
               className="btn-secondary"
-              onClick={() => alert('AI Focus Architect will be connected in Step 8!')}
+              onClick={handleShareSoundscape}
+              style={{
+                background: copiedShareLink ? 'hsla(160, 84%, 44%, 0.15)' : 'var(--bg-surface-2)',
+                borderColor: copiedShareLink ? 'var(--accent-emerald)' : 'var(--border-glass)',
+                color: copiedShareLink ? 'var(--accent-emerald)' : 'var(--text-secondary)'
+              }}
+              title="Copy shareable link to this acoustic soundscape"
             >
-              <Sparkles size={16} color="var(--accent-cyan)" />
+              {copiedShareLink ? <Check size={15} /> : <Share2 size={15} />}
+              <span>{copiedShareLink ? 'Link Copied!' : 'Share Mix'}</span>
+            </button>
+
+            {/* AI Architect Modal Trigger */}
+            <button
+              className="btn-secondary"
+              onClick={() => setIsAIModalOpen(true)}
+              style={{
+                background: 'var(--accent-cyan-glow)',
+                borderColor: 'var(--accent-cyan)',
+                color: 'var(--accent-cyan)'
+              }}
+            >
+              <Sparkles size={16} />
               <span>AI Architect</span>
             </button>
 
+            {/* Global Play / Pause Master Toggle */}
             <button className="btn-primary" onClick={togglePlay}>
               {isPlaying ? <Pause size={18} /> : <Play size={18} />}
               <span>{isPlaying ? 'Pause Soundscape' : 'Start Soundscape'}</span>
             </button>
           </div>
         </header>
+
+        {/* Persistent Active AI Session Banner (When AI is active) */}
+        {activeAIPlan && (
+          <div
+            className="glass-panel"
+            style={{
+              marginTop: '1.5rem',
+              padding: '1.25rem',
+              border: '1px solid var(--accent-cyan)',
+              boxShadow: '0 4px 25px var(--accent-cyan-glow)',
+              background: 'hsla(222, 47%, 12%, 0.75)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <Sparkles size={18} color="var(--accent-cyan)" />
+                <h3 style={{ fontSize: '1rem', color: 'var(--text-primary)' }}>
+                  Active Mission: {activeAIPlan.sessionName}
+                </h3>
+              </div>
+
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <span className="brand-badge" style={{ background: 'var(--accent-indigo-glow)', color: 'var(--accent-indigo)' }}>
+                  ⚡ {activeAIPlan.binaural.beatHz}Hz {activeAIPlan.binaural.targetWave.toUpperCase()}
+                </span>
+                <span className="brand-badge" style={{ background: 'var(--accent-cyan-glow)', color: 'var(--accent-cyan)' }}>
+                  ⏱️ {activeAIPlan.recommendedDurationMinutes} Mins
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontStyle: 'italic', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+              <Quote size={14} color="var(--accent-cyan)" />
+              <span>"{activeAIPlan.focusQuote}"</span>
+            </div>
+
+            {/* Checklist items */}
+            <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+              {activeAIPlan.microGoals.map((g, i) => {
+                const isChecked = !!checkedGoals[i];
+                return (
+                  <div
+                    key={i}
+                    onClick={() => setCheckedGoals((p) => ({ ...p, [i]: !p[i] }))}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.4rem',
+                      background: isChecked ? 'hsla(160, 84%, 44%, 0.15)' : 'var(--bg-surface-2)',
+                      padding: '0.3rem 0.65rem',
+                      borderRadius: 'var(--radius-sm)',
+                      cursor: 'pointer',
+                      fontSize: '0.75rem'
+                    }}
+                  >
+                    <CheckCircle2 size={13} color={isChecked ? 'var(--accent-emerald)' : 'var(--text-muted)'} />
+                    <span style={{ color: isChecked ? 'var(--accent-emerald)' : 'var(--text-primary)', textDecoration: isChecked ? 'line-through' : 'none' }}>
+                      {g}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Section 1: Pomodoro Deep Work Timer Hub */}
         <PomodoroTimer />
@@ -389,7 +599,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Section 2: Sound Channel Mixer Grid */}
+        {/* Section 3: Sound Channel Mixer Grid */}
         <section style={{ marginTop: '1.75rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
             <div>
@@ -495,7 +705,7 @@ export default function App() {
           </div>
         </section>
 
-        {/* Section 3: Binaural Brainwave Entrainment Studio */}
+        {/* Section 4: Binaural Brainwave Entrainment Studio */}
         <BinauralPanel
           config={binauralConfig}
           isPlaying={isPlaying}
@@ -504,6 +714,13 @@ export default function App() {
           onCarrierHzChange={handleCarrierHzChange}
           onVolumeChange={handleBinauralVolume}
           onToggleEnabled={handleToggleBinaural}
+        />
+
+        {/* Gemini AI Focus Architect Modal */}
+        <AIModal
+          isOpen={isAIModalOpen}
+          onClose={() => setIsAIModalOpen(false)}
+          onApplyPlan={handleApplyAIPlan}
         />
       </main>
     </div>
